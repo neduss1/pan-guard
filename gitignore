@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE / editors
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tool outputs
+*.bak
+*.ndjson
+*.log
+pan_guard_pro.seal
+
+# Local state
+.panguard/
+audit.ndjson
