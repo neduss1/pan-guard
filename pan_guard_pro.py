@@ -462,20 +462,50 @@ def is_binary_like(sample: bytes) -> bool:
     text_like = sum(32 <= b <= 126 or b in (9, 10, 13) for b in sample)
     return len(sample) > 0 and (text_like / len(sample) < 0.75)
 
+def is_within(path: str, root: str) -> bool:
+    """
+    Return True if `path` is within `root` after resolving real paths.
+    Prevents symlink/.. escapes.
+    """
+    try:
+        p_real = os.path.normcase(os.path.realpath(path))
+        r_real = os.path.normcase(os.path.realpath(root))
+        return os.path.commonpath([p_real, r_real]) == r_real
+    except Exception:
+        return False
+
 # ----------------------------- Allow-list -----------------------------
 
 def is_allowed_path(path: str, allow_globs: list, base_root: str=None) -> bool:
-    p = os.path.normcase(os.path.abspath(path))
+    """
+    Enforce base_root using both abspath and realpath; require allow_globs to match both
+    the apparent path and the real path to prevent symlink traversal.
+    """
+    p_abs = os.path.normcase(os.path.abspath(path))
+    p_real = os.path.normcase(os.path.realpath(path))
+
     if base_root:
-        root = os.path.normcase(os.path.abspath(base_root))
-        if not p.startswith(root + os.sep) and p != root:
+        r_abs = os.path.normcase(os.path.abspath(base_root))
+        r_real = os.path.normcase(os.path.realpath(base_root))
+        try:
+            if os.path.commonpath([p_abs, r_abs]) != r_abs or os.path.commonpath([p_real, r_real]) != r_real:
+                return False
+        except Exception:
             return False
+
     if not allow_globs:
         return True
-    for g in allow_globs:
-        if fnmatch.fnmatch(p, os.path.normcase(os.path.abspath(g))):
-            return True
-    return False
+
+    def match_globs(pth: str) -> bool:
+        for g in allow_globs:
+            try:
+                if fnmatch.fnmatch(pth, os.path.normcase(os.path.abspath(g))):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    return match_globs(p_abs) and match_globs(p_real)
 
 # ----------------------------- TOCTOU -----------------------------
 
@@ -520,6 +550,25 @@ def toctou_check_or_skip(path: str, lang: str, orig_bytes: bytes) -> bool:
     return True
 
 # ----------------------------- Processors -----------------------------
+
+def sanitize_zip_entry_name(name: str) -> str:
+    """
+    Make a safe, relative, normalized name for ZIP entries to avoid path traversal in archives.
+    We do NOT extract to the filesystem, but we still ensure resulting ZIPs cannot contain
+    absolute paths or `..` segments.
+    """
+    n = name.replace("\\", "/")
+    n = re.sub(r'^[A-Za-z]:[/\\]', '', n)  # strip drive letter
+    n = n.lstrip("/")  # strip leading slashes
+    parts = []
+    for part in n.split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            continue
+        parts.append(part)
+    safe = "/".join(parts) or "entry"
+    return safe[:255]
 
 def process_text_file(path: str, args, findings: List[Finding]):
     with open(path, "rb") as f:
@@ -612,7 +661,13 @@ def process_zip_with_rewrite(path: str, args, findings: List[Finding]):
                         return masked
                     data2, n = CANDIDATE_RE_BYTES.subn(replb, data)
                     if n > 0: data = data2; changed_any = True
-                zout.writestr(item, data)
+                out_name = sanitize_zip_entry_name(item.filename)
+                if out_name != item.filename:
+                    try:
+                        AUDIT_EVENTS.append({"event":"zip_renamed_entry","path": path, "from": item.filename, "to": out_name})
+                    except Exception:
+                        pass
+                zout.writestr(out_name, data)
     if changed_any and not args.dry_run:
         if args.backup and not os.path.exists(path + ".bak"):
             shutil.copy2(path, path + ".bak")
@@ -1133,6 +1188,7 @@ def apply_profile(settings: dict):
         settings["rewrite_archives"] = True
         settings["log_format"] = settings.get("log_format","ndjson")
         settings["base_root"] = os.path.abspath(settings["path"])
+        settings["follow_symlinks"] = False  # enforce no symlink traversal
     elif prof == "safe-detect":
         settings["dry_run"] = True
         settings["binary_replace"] = False
