@@ -5,7 +5,7 @@ This is a community project provided “as is”. We aim to keep `main` stable. 
 
 ## Reporting a vulnerability
 Please **do not** open public issues for sensitive reports.
-- Email: `security@yourdomain.example` (replace with your real inbox)
+- Email: `neduss@proton.me` (replace with your real inbox)
 - Subject: `PAN Guard vulnerability`
 - Include: version/commit, environment, PoC steps, expected vs. actual behavior, and impact.
 
